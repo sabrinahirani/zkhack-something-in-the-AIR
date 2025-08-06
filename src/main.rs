@@ -1,8 +1,19 @@
 use log::debug;
 use prompt::{puzzle, welcome};
-use semaphore::{AccessSet, PrivKey, PubKey};
+use semaphore::{
+    air::rescue::{apply_inv_mds, ARK1, ARK2},
+    print_trace,
+    prover::{apply_rescue_round, SemaphoreProver},
+    AccessSet, PrivKey, PubKey, Signal,
+};
 use std::{io::Write, time::Instant};
 use winter_utils::Serializable;
+
+use winterfell::{
+    crypto::{hashers::Rp64_256 as Rescue, Hasher, MerkleTree},
+    math::{fields::f64::BaseElement as Felt, FieldElement},
+    Prover, TraceTable,
+};
 
 // DATA
 // ================================================================================================
@@ -20,13 +31,140 @@ const PUB_KEYS: [&str; 8] = [
 ];
 
 /// Our private key; this key corresponds to the 4th public key above (d5a494b415c2...).
-const MY_PRIV_KEY: &str = "86475af21e4445b71bfa496416ee2d0765946bd3a854a77fe07db53c7994d0a5";
+// const MY_PRIV_KEY: &str = "86475af21e4445b71bfa496416ee2d0765946bd3a854a77fe07db53c7994d0a5";
 
 /// A topic on which we'll send a signal
 const TOPIC: &str = "The Winter is Coming...";
 
 // SEMAPHORE TESTER
 // ================================================================================================
+
+pub fn forge_signal() -> Signal {
+    // Target the first public key
+    let pub_keys = PUB_KEYS
+        .iter()
+        .map(|&k| PubKey::parse(k))
+        .collect::<Vec<_>>();
+    let first_pubkey = pub_keys[0].elements();
+    let mut rescue_state = [
+        Felt::ZERO,
+        Felt::ZERO,
+        Felt::ZERO,
+        Felt::ZERO,
+        first_pubkey[0],
+        first_pubkey[1],
+        first_pubkey[2],
+        first_pubkey[3],
+        Felt::ZERO,
+        Felt::ZERO,
+        Felt::ZERO,
+        Felt::ZERO,
+    ];
+
+    // Reverse Rp64_256 algorithm
+    for round in (0..7).rev() {
+        // Reverse add_constants
+        rescue_state
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, s)| *s -= ARK2[round][i]);
+        // Reverse apply_mds
+        apply_inv_mds(&mut rescue_state);
+        // Reverse apply_inv_sbox
+        rescue_state.iter_mut().for_each(|s| *s = s.exp(7));
+        // Reverse add_constants
+        rescue_state
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, s)| *s -= ARK1[round][i]);
+        // Reverse apply_mds
+        apply_inv_mds(&mut rescue_state);
+        // Reverse apply_sbox
+        rescue_state
+            .iter_mut()
+            .for_each(|s| *s = s.exp(10540996611094048183));
+    }
+
+    // Initialize a trace with 25 columns and 32 lines
+    let mut trace = TraceTable::new(25, 32);
+
+    // Copy the fake initial Rescue state
+    let mut trace_state = [Felt::ZERO; 25];
+    trace_state[..12].clone_from_slice(&rescue_state[..12]);
+
+    // Initialize the nullifier computation
+    let topic_hash: [Felt; 4] = Rescue::hash(TOPIC.as_bytes()).into();
+    trace_state[12] = Felt::new(8);
+    trace_state[16..20].clone_from_slice(&rescue_state[4..8]);
+    trace_state[20..24].clone_from_slice(&topic_hash);
+    trace.update_row(0, &trace_state);
+
+    // Compute the nullifier
+    for round in 0..7 {
+        apply_rescue_round(&mut trace_state[..12], round);
+        apply_rescue_round(&mut trace_state[12..24], round);
+        trace.update_row(round + 1, &trace_state);
+    }
+
+    // Save the computed nullifier, which is: 05321040103b38da154baabbf2e7e56efb562d4dbdfeb30c058f17a25e5e2c4b
+    let nullifier = <Rescue as Hasher>::Digest::from([
+        trace_state[16],
+        trace_state[17],
+        trace_state[18],
+        trace_state[19],
+    ]);
+
+    // Compute the Merkle tree for the public keys
+    let leaves = pub_keys
+        .iter()
+        .map(|p| <Rescue as Hasher>::Digest::new(p.elements()))
+        .collect::<Vec<_>>();
+    assert_eq!(leaves.len(), 8);
+    let key_tree: MerkleTree<Rescue> = MerkleTree::new(leaves).unwrap();
+    let merkle_path = key_tree.prove(0).unwrap();
+    assert_eq!(merkle_path.len(), 4);
+    assert_eq!(<[Felt; 4]>::from(merkle_path[0]), first_pubkey);
+
+    // Fill the trace
+    for cycle_num in 1..4 {
+        trace_state[0] = Felt::new(8);
+        trace_state[1] = Felt::ZERO;
+        trace_state[2] = Felt::ZERO;
+        trace_state[3] = Felt::ZERO;
+        let path_node: [Felt; 4] = merkle_path[cycle_num].into();
+        path_node
+            .iter()
+            .enumerate()
+            .for_each(|(i, v)| trace_state[8 + i] = *v);
+        for i in 12..25 {
+            trace_state[i] = Felt::ZERO;
+        }
+        trace_state[16] = trace_state[4];
+        trace_state[17] = trace_state[5];
+        trace_state[18] = trace_state[6];
+        trace_state[19] = trace_state[7];
+        trace.update_row(8 * cycle_num, &trace_state);
+
+        for round in 0..7 {
+            apply_rescue_round(&mut trace_state[..12], round);
+            apply_rescue_round(&mut trace_state[12..24], round);
+            trace.update_row(8 * cycle_num + round + 1, &trace_state);
+        }
+    }
+
+    // Set a bit to one to ensure the constraint degree is not zero, without
+    // actually changing the validity of the execution trace.
+    // Otherwise, running in debug mode fails.
+    trace.set(24, 1, FieldElement::ONE);
+
+    // Display the generated trace
+    print_trace(&trace, 1, 0, 0..25);
+
+    // Generate a proof
+    let prover = SemaphoreProver::default();
+    let proof = prover.prove(trace).expect("failed to generate proof");
+    Signal { nullifier, proof }
+}
 
 pub fn main() {
     // configure logging
@@ -46,8 +184,8 @@ pub fn main() {
             .collect::<Vec<_>>(),
     );
 
-    // parse our private key
-    let my_key = PrivKey::parse(MY_PRIV_KEY);
+    // parse our private key... which is not necessary when forging a signal
+    // let my_key = PrivKey::parse(MY_PRIV_KEY);
 
     debug!("============================================================");
 
@@ -55,7 +193,10 @@ pub fn main() {
     // proof attesting that the private key is in the access set, and that the nullifier contained
     // in the signal was built correctly.
     let now = Instant::now();
-    let signal = access_set.make_signal(&my_key, TOPIC);
+
+    // Forge a signal without using the private key
+    // let signal = access_set.make_signal(&my_key, TOPIC);
+    let signal = forge_signal();
     debug!(
         "---------------------\nSignal created in {} ms",
         now.elapsed().as_millis()
@@ -75,6 +216,8 @@ pub fn main() {
         Err(err) => debug!("something went terribly wrong: {}", err),
     }
     debug!("============================================================");
+
+    // Modified nullifier is: aac9702c5dbb348dcc1456d236b26ff08a05bedf5278639a1a6719478949c0f1
 
     assert_ne!(
         signal.nullifier.to_bytes(),

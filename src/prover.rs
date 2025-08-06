@@ -203,7 +203,7 @@ impl Default for SemaphoreProver {
 // HELPER FUNCTIONS
 // ================================================================================================
 
-fn apply_rescue_round(state: &mut [Felt], round: usize) {
+pub fn apply_rescue_round(state: &mut [Felt], round: usize) {
     let mut state_array = [Felt::ZERO; 12];
     for (a_val, &s_val) in state_array.iter_mut().zip(state.iter()) {
         *a_val = s_val;

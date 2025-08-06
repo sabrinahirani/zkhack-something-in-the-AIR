@@ -40,10 +40,10 @@ use winterfell::{
     ProofOptions, Prover, StarkProof, Trace, TraceTable,
 };
 
-mod air;
+pub mod air;
 use air::{PublicInputs, SemaphoreAir};
 
-mod prover;
+pub mod prover;
 use prover::SemaphoreProver;
 
 // TYPE ALIASES

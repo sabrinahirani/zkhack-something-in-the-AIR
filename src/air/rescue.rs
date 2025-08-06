@@ -58,7 +58,7 @@ fn apply_mds<E: FieldElement + From<Felt>>(state: &mut [E; STATE_WIDTH]) {
 }
 
 #[inline(always)]
-fn apply_inv_mds<E: FieldElement + From<Felt>>(state: &mut [E; STATE_WIDTH]) {
+pub fn apply_inv_mds<E: FieldElement + From<Felt>>(state: &mut [E; STATE_WIDTH]) {
     let mut result = [E::ZERO; STATE_WIDTH];
     result.iter_mut().zip(INV_MDS).for_each(|(r, mds_row)| {
         state.iter().zip(mds_row).for_each(|(&s, m)| {
@@ -444,7 +444,7 @@ const INV_MDS: [[Felt; STATE_WIDTH]; STATE_WIDTH] = [
 ///
 /// The constants are broken up into two arrays ARK1 and ARK2; ARK1 contains the constants for the
 /// first half of Rescue round, and ARK2 contains constants for the second half of Rescue round.
-const ARK1: [[Felt; STATE_WIDTH]; NUM_ROUNDS] = [
+pub const ARK1: [[Felt; STATE_WIDTH]; NUM_ROUNDS] = [
     [
         Felt::new(13917550007135091859),
         Felt::new(16002276252647722320),
@@ -545,7 +545,7 @@ const ARK1: [[Felt; STATE_WIDTH]; NUM_ROUNDS] = [
     ],
 ];
 
-const ARK2: [[Felt; STATE_WIDTH]; NUM_ROUNDS] = [
+pub const ARK2: [[Felt; STATE_WIDTH]; NUM_ROUNDS] = [
     [
         Felt::new(7989257206380839449),
         Felt::new(8639509123020237648),

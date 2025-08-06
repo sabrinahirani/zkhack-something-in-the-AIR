@@ -7,7 +7,7 @@ use winterfell::{
 mod utils;
 use utils::{are_equal, is_binary, is_zero, not, EvaluationResult};
 
-mod rescue;
+pub mod rescue;
 
 // SEMAPHORE AIR
 // ================================================================================================
