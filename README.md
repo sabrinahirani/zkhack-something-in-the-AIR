@@ -1,6 +1,6 @@
 ## zkHack Challenge #7: Something in the AIR
 
-*Challenge: [https://www.zkhack.dev/events/puzzle7.html](https://www.zkhack.dev/events/puzzle7.html)*
+*Challenge: [https://www.zkhack.dev/events/puzzle7.html](https://www.zkhack.dev/events/puzzleM1.html)*
 
 ---
 
